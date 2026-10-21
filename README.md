@@ -1,7 +1,17 @@
-# DiscMount (Phase 1)
-
+# DISCMOUNT
 Mounts USB DVD/Blu-ray drives on Android / Google TV **without kernel drivers**: communicates SCSI/MMC directly over USB (Bulk-Only Transport) and reads UDF / ISO9660 in user space, similar to MLUSB Mounter.
 
+<p align="center">
+  <img src="docs/xSLGZXQ.jpeg">
+  <br>
+
+
+
+
+
+
+
+# DiscMount (Phase 1)
 ## What Phase 1 Does
 - Detects the drive (Mass Storage class, subclass 2/6, BOT protocol), requests USB permission, and opens it.
 - Waits for the disc to be ready, reads capacity and disc type (CD/DVD/BD).
