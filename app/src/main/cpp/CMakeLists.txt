@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025-2026 DiscMount contributors
+
 cmake_minimum_required(VERSION 3.22)
 project(discmountcss C)
 

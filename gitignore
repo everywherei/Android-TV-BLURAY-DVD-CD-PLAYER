@@ -1,0 +1,13 @@
+build/
+.gradle/
+*.iml
+local.properties
+.idea/
+app/src/main/cpp/libdvdcss/
+
+# User-supplied key files and local build products must never be committed
+KEYDB.cfg
+keydb.cfg
+*.apk
+*.aab
+.DS_Store
