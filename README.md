@@ -1,5 +1,9 @@
 # DiscMount
+Mounts USB DVD/Blu-ray drives on Android / Google TV **without kernel drivers**: communicates SCSI/MMC directly over USB (Bulk-Only Transport) and reads UDF / ISO9660 in user space. Sata to USB too. 
 
+<p align="center">
+  <img src="docs/xSLGZXQ.jpeg">
+  <br>
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android%20TV%20%2F%20Google%20TV-green)
 ![minSdk](https://img.shields.io/badge/minSdk-26-informational)
