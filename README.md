@@ -1,66 +1,49 @@
-# DiscMount (Fase 1)
+# DiscMount (Phase 1)
 
-Monta unidades DVD/Blu-ray USB en Android / Google TV **sin drivers del kernel**: habla SCSI/MMC directamente por USB
-(Bulk-Only Transport) y lee UDF / ISO9660 en espacio de usuario, como MLUSB Mounter.
+Mounts USB DVD/Blu-ray drives on Android / Google TV **without kernel drivers**: communicates SCSI/MMC directly over USB (Bulk-Only Transport) and reads UDF / ISO9660 in user space, similar to MLUSB Mounter.
 
-## Qué hace la Fase 1
-- Detecta la unidad (clase Mass Storage, subclase 2/6, protocolo BOT), pide permiso USB y la abre.
-- Espera a que el disco esté listo, lee capacidad y tipo de disco (CD/DVD/BD).
-- Sistemas de ficheros: ISO9660 (+Joliet), UDF 1.02–2.60 incluida la **partición de metadatos** de Blu-ray.
-- Reproductor integrado (libvlc) para vídeo, audio e imágenes del disco; explorador con D-pad, copia de ficheros a otro almacenamiento y un **DocumentsProvider**: el disco aparece
-  en el selector de archivos de Android, de modo que VLC y otras apps pueden abrir los ficheros (p. ej. `.m2ts`, `.vob`).
+## What Phase 1 Does
+- Detects the drive (Mass Storage class, subclass 2/6, BOT protocol), requests USB permission, and opens it.
+- Waits for the disc to be ready, reads capacity and disc type (CD/DVD/BD).
+- File systems: ISO9660 (+Joliet), UDF 1.02–2.60 including the Blu-ray **metadata partition**.
+- Integrated player (libvlc) for video, audio, and images from the disc; explorer with D-pad, file copying to other storage, and a **DocumentsProvider**: the disc appears in Android's file picker so that VLC and other apps can open files (e.g., `.m2ts`, `.vob`).
 
-## DVD-Video con CSS (Fase 2)
-Los VOB de un DVD comercial se leen a través de **libdvdcss** (autenticación con la unidad, clave de disco y de título),
-igual que hace VLC en PC. libdvdcss no está en este repositorio: `tools/fetch_libdvdcss.sh` lo descarga (fork de Kodi,
-commit fijado) y le aplica un parche de una línea; el código propio en `app/src/main/cpp` sustituye `ioctl.c` por
-comandos SCSI/MMC enviados por tu unidad USB y conecta todo por JNI. El botón **Reproducir película DVD** elige el
-conjunto de títulos más largo de `VIDEO_TS` y lo reproduce sin menús. Úsalo solo con discos que poseas; en algunos países el
-descifrado de CSS está restringido. Al enlazar libdvdcss (GPL) el APK resultante es GPL: no lo redistribuyas sin cumplir su licencia.
-Pruebas en PC: el puente JNI lee discos sin cifrar bit a bit y emite la secuencia correcta de comandos de autenticación;
-**el descifrado real no se ha podido probar** (sin disco cifrado ni unidad aquí).
+## DVD-Video with CSS (Phase 2)
+VOB files from a commercial DVD are read via **libdvdcss** (drive authentication, disc key, and title key), just like VLC does on PC. libdvdcss is not included in this repository: `tools/fetch_libdvdcss.sh` downloads it (Kodi fork, pinned commit) and applies a one-line patch; the custom code in `app/src/main/cpp` replaces `ioctl.c` with SCSI/MMC commands sent by your USB drive and connects everything via JNI. The **Play DVD movie** button picks the longest title set from `VIDEO_TS` and plays it without menus. Use only with discs you own; in some countries, CSS decryption is restricted. By linking libdvdcss (GPL), the resulting APK is GPL: do not redistribute it without complying with its license.
+PC testing: the JNI bridge reads unencrypted discs bit-by-bit and emits the correct authentication command sequence; **actual decryption could not be tested** (no encrypted disc or drive present here).
 
-## Blu-ray con AACS (KEYDB.cfg)
-Botón **Importar KEYDB.cfg** (selector de archivos) o copia el fichero a `/sdcard/Android/data/dev.discmount/files/KEYDB.cfg`.
-Al montar un Blu-ray se calcula el hash del disco (SHA-1 de `AACS/Unit_Key_RO.inf`), se busca en tu KEYDB.cfg y, con la VUK
-(`V`) o las claves de unidad (`U`) de la entrada, se descifran los `.m2ts` al vuelo (`core/.../bd/Aacs.kt`). **Reproducir película
-Blu-ray** elige la lista de reproducción más larga. Solo funciona con discos cuya entrada tenga VUK o claves de unidad; no hay
-autenticación con la unidad (entradas solo con MEK no sirven), ni BD+, ni Ultra HD (AACS 2.0). Úsalo solo con discos que poseas.
-Pruebas: `AacsTest.kt` (cifrado/descifrado sintético; no se ha probado con un disco real).
+## Blu-ray with AACS (KEYDB.cfg)
+**Import KEYDB.cfg** button (file picker) or copy the file to `/sdcard/Android/data/dev.discmount/files/KEYDB.cfg`.
+When mounting a Blu-ray, the disc hash is computed (SHA-1 of `AACS/Unit_Key_RO.inf`), looked up in your KEYDB.cfg, and using the entry's VUK (`V`) or drive keys (`U`), the `.m2ts` files are decrypted on-the-fly (`core/.../bd/Aacs.kt`). **Play Blu-ray movie** selects the longest playlist. Only works with discs whose entry has a VUK or drive keys; drive authentication (entries with MEK only do not work), BD+, and Ultra HD (AACS 2.0) are not supported. Use only with discs you own.
+Testing: `AacsTest.kt` (synthetic encryption/decryption; not tested with a real disc).
 
-## Estructura
-- `core/`: Kotlin puro (sin Android). Bloques, UDF/ISO, BOT, comandos SCSI. Aquí se podrá enganchar CSS/AACS (`ScsiTransport.execute`).
-- `app/`: app Android (Activity, transporte USB, DocumentsProvider).
-- `tools/`: generador de imágenes de prueba y script de tests.
+## Structure
+- `core/`: Pure Kotlin (no Android). Blocks, UDF/ISO, BOT, SCSI commands. CSS/AACS can be hooked here (`ScsiTransport.execute`).
+- `app/`: Android app (Activity, USB transport, DocumentsProvider).
+- `tools/`: Test image generator and test script.
 
-## Compilar sin Android Studio (GitHub Actions)
-Sube la carpeta a un repositorio tuyo de GitHub; el workflow `.github/workflows/build-apk.yml` ejecuta los tests y
-genera `app-debug.apk` (pestaña *Actions* > última ejecución > *Artifacts* > `DiscMount-debug-apk`).
+## Building without Android Studio (GitHub Actions)
+Upload the folder to your own GitHub repository; the `.github/workflows/build-apk.yml` workflow runs tests and generates `app-debug.apk` (*Actions* tab > latest run > *Artifacts* > `DiscMount-debug-apk`).
 
-## Compilar con Android Studio
-Abre la carpeta en Android Studio (Ladybug o superior; genera el wrapper de Gradle) y ejecuta `app`.
-minSdk 26, JDK 17. Instálalo en la tele por ADB: `adb install app-debug.apk`.
+## Building with Android Studio
+Open the folder in Android Studio (Ladybug or higher; generates the Gradle wrapper) and run `app`.
+minSdk 26, JDK 17. Install it on the TV via ADB: `adb install app-debug.apk`.
 
-## Tests del núcleo (sin Android)
-`tools/run_core_tests.sh` (necesita Java 17+, Python 3 y `pip install pycdlib`). Compila el núcleo, genera imágenes
-ISO/Joliet/UDF y las lee a través de un dispositivo USB falso, comprobando el SHA-256 de cada fichero.
+## Core Tests (without Android)
+`tools/run_core_tests.sh` (requires Java 17+, Python 3, and `pip install pycdlib`). Compiles the core, generates ISO/Joliet/UDF images, and reads them via a fake USB device, checking the SHA-256 hash of each file.
 
-## Estado honesto
-- Verificado: el núcleo (UDF/ISO/BOT/SCSI) contra imágenes reales generadas con pycdlib y contra una imagen UDF 2.50 con
-  metadatos fragmentados construida a mano.
-- **No verificado**: la app Android no se ha podido compilar ni ejecutar en el entorno de desarrollo (sin SDK de Android)
-  y no se ha probado con una unidad real. Espera pequeños errores de compilación y ajustes con tu hardware.
-- Límites conocidos: sin UAS (solo BOT), sin particiones virtuales UDF (VAT), sin Rock Ridge, sin remapeo de sectores
-  defectuosos (sparable). `AndroidUsbTransport.CHUNK` (16 KiB) puede subirse para más velocidad.
+## Honest Status
+- Verified: The core (UDF/ISO/BOT/SCSI) against real images generated with pycdlib and against a hand-crafted UDF 2.50 image with fragmented metadata.
+- **Unverified**: The Android app could not be compiled or run in the development environment (no Android SDK) and has not been tested with a real drive. Expect minor compilation errors and tweaks needed for your hardware.
+- Known limitations: No UAS (BOT only), no UDF virtual partitions (VAT), no Rock Ridge, no defective sector remapping (sparable). `AndroidUsbTransport.CHUNK` (16 KiB) can be increased for higher speed.
 
-## Próximas fases
-2. DVD-Video: CSS (autenticación MMC `REPORT KEY`/`SEND KEY` sobre `ScsiTransport`) + libdvdread/libdvdnav + libvlc.
-3. Blu-ray: libbluray + libaacs con importación de tu `KEYDB.cfg`, reproducción de la playlist principal.
+## Upcoming Phases
+2. DVD-Video: CSS (`REPORT KEY`/`SEND KEY` MMC authentication over `ScsiTransport`) + libdvdread/libdvdnav + libvlc.
+3. Blu-ray: libbluray + libaacs with import of your `KEYDB.cfg`, playback of the main playlist.
 
-## v0.4 – Música y detección de disco
+## v0.4 – Music and Disc Detection
 
-- Detecta al insertar el disco si es Compact Disc (audio/datos), DVD (vídeo/datos) o Blu-ray (vídeo/datos) y lo muestra con un disco dibujado
-  y su distintivo (diseños propios, no los logotipos oficiales).
-- CD de audio original: lectura de TOC y CD-TEXT, pistas leídas con READ CD y reproducidas como WAV al vuelo.
-- Ficheros de audio (mp3, flac, wav, ogg, m4a, aac, opus, ape, wv, dsf/dff…) con lista de reproducción de la carpeta y siguiente/anterior.
-- Los SACD (discos) no se pueden reproducir (formato protegido); sí los ficheros .dsf/.dff que libvlc sepa decodificar.
+- Detects upon inserting a disc whether it is a Compact Disc (audio/data), DVD (video/data), or Blu-ray (video/data) and displays it with a drawn disc and its badge (custom designs, not official logos).
+- Original audio CD: TOC and CD-TEXT reading, tracks read with READ CD and played back as WAV on-the-fly.
+- Audio files (mp3, flac, wav, ogg, m4a, aac, opus, ape, wv, dsf/dff, etc.) with folder playlist and next/previous controls.
+- SACDs (discs) cannot be played (protected format); however, .dsf/.dff files that libvlc knows how to decode are supported.
