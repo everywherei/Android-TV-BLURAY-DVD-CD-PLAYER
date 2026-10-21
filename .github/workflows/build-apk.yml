@@ -1,1 +1,35 @@
+name: Build APK
 
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Tests del núcleo (UDF/ISO/SCSI)
+        run: |
+          pip install pycdlib
+          python3 tools/gen_test_images.py core/build/test-images
+          gradle :core:selfTest -PimagesDir=core/build/test-images
+
+      - name: Descargar libdvdcss (descifrado CSS)
+        run: sh tools/fetch_libdvdcss.sh
+
+      - name: Compilar APK
+        run: gradle :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiscMount-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
