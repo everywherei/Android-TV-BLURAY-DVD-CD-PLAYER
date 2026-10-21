@@ -1,6 +1,0 @@
-build/
-.gradle/
-*.iml
-local.properties
-.idea/
-app/src/main/cpp/libdvdcss/
