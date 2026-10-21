@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mass Storage: subclase 6 (SCSI transparente) y 2 (MMC-2/SFF-8020i), protocolo 0x50 (Bulk-Only) = 80 -->
+    <usb-device class="8" subclass="6" protocol="80" />
+    <usb-device class="8" subclass="2" protocol="80" />
+</resources>
