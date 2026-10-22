@@ -18,7 +18,7 @@ MLUSB Mounter. Playback is handled by LibVLC. The whole interface is remote-cont
 
 
 <img src="https://i.imgur.com/BiwxWyN.jpeg" alt="Descripción de la imagen" width="100%">
-VIDEO DEMO https://studio.youtube.com/video/kLmdMa___uI/edit
+VIDEO DEMO https://youtu.be/kLmdMa___uI?si=bYNfJQtAp-3qLaYO
 
 ## Features
 
