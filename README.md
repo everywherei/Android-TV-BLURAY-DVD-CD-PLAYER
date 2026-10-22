@@ -16,6 +16,10 @@ MLUSB Mounter. Playback is handled by LibVLC. The whole interface is remote-cont
 > **Legal notice:** DiscMount is meant for discs **you own**. Handling copy-protected discs (CSS / AACS) may be restricted by law where you live.
 > No keys are included or downloaded. Please read [`DISCLAIMER.md`](DISCLAIMER.md) before using or building it.
 
+
+<img src="https://i.imgur.com/BiwxWyN.jpeg" alt="Descripción de la imagen" width="100%">
+
+
 ## Features
 
 - **Drive support:** detects USB optical drives (Mass Storage, SCSI transparent command set, Bulk-Only), asks for USB permission, waits for the disc and identifies its type (CD / DVD / BD).
