@@ -1,9 +1,5 @@
-# BD DVD CD DiscMount
-Mounts USB DVD/Blu-ray drives on Android / Google TV **without kernel drivers**: communicates SCSI/MMC directly over USB (Bulk-Only Transport) and reads UDF / ISO9660 in user space. Sata to USB too. 
+# DiscMount
 
-<p align="center">
-  <img src="docs/xSLGZXQ.jpeg">
-  <br>
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android%20TV%20%2F%20Google%20TV-green)
 ![minSdk](https://img.shields.io/badge/minSdk-26-informational)
@@ -15,10 +11,6 @@ MLUSB Mounter. Playback is handled by LibVLC. The whole interface is remote-cont
 
 > **Legal notice:** DiscMount is meant for discs **you own**. Handling copy-protected discs (CSS / AACS) may be restricted by law where you live.
 > No keys are included or downloaded. Please read [`DISCLAIMER.md`](DISCLAIMER.md) before using or building it.
-
-
-<img src="https://i.imgur.com/BiwxWyN.jpeg" alt="Descripción de la imagen" width="100%">
-VIDEO DEMO https://youtu.be/kLmdMa___uI?si=bYNfJQtAp-3qLaYO
 
 ## Features
 
@@ -42,7 +34,8 @@ VIDEO DEMO https://youtu.be/kLmdMa___uI?si=bYNfJQtAp-3qLaYO
 Limitations:
 
 - Only entries with a VUK or unit keys work. Entries with only a media key (`M`/MEK) do not, because there is no AACS drive authentication.
-- No BD+ and no Ultra HD Blu-ray (AACS 2.0) support.
+- No BD+ support.
+- **Ultra HD Blu-ray (AACS 2.0) is experimental:** it only works if your `KEYDB.cfg` has a VUK (or unit keys) for the disc, and it assumes the bulk stream encryption is the same as AACS 1.0. It has not been verified on real UHD discs. DiscMount has no AACS 2.0 drive authentication, so a drive that can read UHD discs (e.g. one with custom firmware) is needed. 4K/HDR output depends on your device and LibVLC.
 - The AACS code is original and was tested with synthetic data and on real Blu-ray discs by the author; coverage of all disc types is not guaranteed.
 - DiscMount ships **no keys**. You are responsible for obtaining a key file lawfully, for discs you own.
 

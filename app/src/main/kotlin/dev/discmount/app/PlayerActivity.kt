@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025-2026 DiscMount contributors
+
 package dev.discmount.app
 
 import android.app.Activity
@@ -159,17 +162,20 @@ class PlayerActivity : Activity() {
             val pl = BdPlaylists.main(fs) ?: throw IllegalStateException(I18n.t("no_playlist"))
             pl.clips.map { BdPlaylists.clipPath(it) }
         } else listOf(path)
+        var uhd = false
         val keys = when (val r = DiscSession.aacs(this)) {
             is AacsResult.None -> null
-            is AacsResult.Ok -> r.keys.unitKeys
+            is AacsResult.Ok -> { uhd = r.keys.uhd; r.keys.unitKeys }
             is AacsResult.Failed -> throw IllegalStateException(I18n.aacs(r))
         }
         if (keys != null && fs.stat("/BDSVM") != null) runOnUiThread { showHud(I18n.t("bdplus_warn"), 5000) }
         val parts = clips.map { c ->
             val f = fs.open(c)
-            if (keys == null) f else AacsFile(f, keys).also { it.probe() }
+            if (keys == null) f else AacsFile(f, keys).also {
+                try { it.probe() } catch (e: dev.discmount.core.bd.AacsKeyException) { throw IllegalStateException(I18n.t(if (uhd) "aacs_bad_key_uhd" else "aacs_bad_key")) }
+            }
         }
-        if (keys != null) runOnUiThread { showHud(I18n.t("aacs_decrypt"), 3000) }
+        if (keys != null) runOnUiThread { showHud(I18n.t(if (uhd) "aacs_decrypt_uhd" else "aacs_decrypt"), 3000) }
         return if (parts.size == 1) parts[0] else ConcatFile(parts)
     }
 
