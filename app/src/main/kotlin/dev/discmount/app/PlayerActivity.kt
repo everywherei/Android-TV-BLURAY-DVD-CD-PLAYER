@@ -23,6 +23,7 @@ import dev.discmount.core.bd.AacsResult
 import dev.discmount.core.bd.BdPlaylists
 import dev.discmount.core.scsi.CdTrackFile
 import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 
@@ -120,6 +121,7 @@ class PlayerActivity : Activity() {
         val n = index + delta
         if (n !in playlist.indices) { if (delta > 0) finish(); return }
         index = n
+        softVideo = false; softTried = false; resumeAt = 0
         loadCurrent()
     }
 
@@ -182,6 +184,39 @@ class PlayerActivity : Activity() {
     private var aout = "auto"
     private var diagShown = false
 
+    // Descodificación de vídeo por software (VC-1, MPEG-4 ASP, etc. que el decodificador hardware no muestra).
+    private var softVideo = false
+    private var softTried = false
+    private var resumeAt = 0L
+    private var voutCount = 0
+
+    private fun checkVideo(last: Boolean) {
+        val mp = player ?: return
+        if (audioMode || softVideo || softTried) return
+        val media = mp.media ?: return
+        var hasVideo = false
+        var vc1 = false
+        try {
+            for (i in 0 until media.trackCount) {
+                val t = media.getTrack(i)
+                if (t.type == IMedia.Track.Type.Video) {
+                    hasVideo = true
+                    val c = "${t.codec} ${t.originalCodec}".lowercase()
+                    if (listOf("wvc1", "wmv3", "wmva", "vc1", "vc-1").any { c.contains(it) }) vc1 = true
+                }
+            }
+        } finally { media.release() }
+        // VC-1: muchos decodificadores hardware de Android TV no lo soportan (audio sin imagen). Cualquier otro códec
+        // de vídeo que siga sin ventana de vídeo tras unos segundos también pasa a software.
+        if (vc1 || (last && hasVideo && voutCount == 0)) {
+            softTried = true
+            softVideo = true
+            resumeAt = mp.time
+            showHud(I18n.t("soft_decode"), 3000)
+            loadCurrent()
+        }
+    }
+
     private fun start(file: DiscFile) {
         var mp = player
         if (mp == null) {
@@ -203,6 +238,11 @@ class PlayerActivity : Activity() {
         val fd = DiscProxy.open(this, file)
         pfd = fd
         val media = Media(vlc, fd.fileDescriptor)
+        if (softVideo) {
+            media.setHWDecoderEnabled(false, false)
+            media.addOption(":codec=avcodec,all")
+        }
+        voutCount = 0
         mp.media = media
         media.release()
         mp.play()
@@ -232,8 +272,16 @@ class PlayerActivity : Activity() {
 
         mp.setEventListener { ev ->
             when (ev.type) {
+                MediaPlayer.Event.Vout -> voutCount = ev.voutCount
                 MediaPlayer.Event.Playing -> {
-                    runOnUiThread { fitNow() }
+                    runOnUiThread {
+                        fitNow()
+                        if (resumeAt > 0 && !audioMode) { player?.time = resumeAt; resumeAt = 0 }
+                        if (!softTried && !softVideo && !audioMode) {
+                            ui.postDelayed({ checkVideo(false) }, 1500)
+                            ui.postDelayed({ checkVideo(true) }, 6000)
+                        }
+                    }
                     if (!diagShown) {
                         diagShown = true
                         runOnUiThread {
