@@ -3,7 +3,8 @@
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android%20TV%20%2F%20Google%20TV-green)
 ![minSdk](https://img.shields.io/badge/minSdk-26-informational)
-
+<p align="center"> <img src="docs/xSLGZXQ.jpeg"> 
+ License: GPL v3+ Platform minSdk
 **Play and browse CDs, DVDs and Blu-ray discs from a USB optical drive on Android TV / Google TV — no kernel drivers, no root.**
 
 DiscMount talks SCSI/MMC directly to the drive over USB (Bulk-Only Transport) and reads UDF / ISO 9660 in user space, in the spirit of
