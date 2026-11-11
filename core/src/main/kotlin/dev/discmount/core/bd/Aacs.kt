@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025-2026 DiscMount contributors
+
 package dev.discmount.core.bd
 
 import dev.discmount.core.DiscFile
@@ -10,7 +13,7 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /** Claves de unidad CPS de un disco AACS ya resueltas con el KEYDB.cfg del usuario. */
-class AacsKeys(val discId: String, val title: String, val unitKeys: List<ByteArray>)
+class AacsKeys(val discId: String, val title: String, val unitKeys: List<ByteArray>, val uhd: Boolean = false)
 
 sealed class AacsResult {
     /** El disco no usa AACS. */
@@ -42,8 +45,8 @@ object Aacs {
     fun isProtected(fs: DiscFileSystem): Boolean =
         try { UKRO.any { fs.stat(it) != null } } catch (e: Exception) { false }
 
-    /** Versión de AACS por index.bdmv ("0300" = AACS 2.0 / Ultra HD Blu-ray, no soportado). */
-    private fun isUhd(fs: DiscFileSystem): Boolean = try {
+    /** Versión de AACS por index.bdmv ("0300" = AACS 2.0 / Ultra HD Blu-ray, soporte experimental con VUK). */
+    fun isUhd(fs: DiscFileSystem): Boolean = try {
         readAll(fs, "/BDMV/index.bdmv")?.takeIf { it.size >= 8 }?.let { String(it, 4, 4, Charsets.ISO_8859_1) == "0300" } ?: false
     } catch (e: Exception) { false }
 
@@ -54,7 +57,7 @@ object Aacs {
     fun resolve(fs: DiscFileSystem, keyDb: (() -> List<() -> BufferedReader>)?): AacsResult {
         val inf = try { UKRO.firstNotNullOfOrNull { readAll(fs, it) } } catch (e: Exception) { null } ?: return AacsResult.None
         if (inf.size < 4 + 2) return AacsResult.Failed("Unit_Key_RO.inf del disco no es válido.", "bad_inf")
-        if (isUhd(fs)) return AacsResult.Failed("Ultra HD Blu-ray (AACS 2.0): no soportado.", "uhd")
+        val uhd = isUhd(fs)
         val discId = KeyDb.bytesToHex(MessageDigest.getInstance("SHA-1").digest(inf))
 
         val sources = keyDb?.invoke().orEmpty()
@@ -81,7 +84,7 @@ object Aacs {
                 "La entrada de este disco en KEYDB.cfg solo trae la clave de medio (M/MEK): hace falta una entrada con VUK (V) o claves de unidad (U).", "mek_only")
             else -> return AacsResult.Failed("La entrada de este disco en KEYDB.cfg no trae VUK ni claves de unidad.", "no_keys")
         }
-        return AacsResult.Ok(AacsKeys(discId, entry.title, keys))
+        return AacsResult.Ok(AacsKeys(discId, entry.title, keys, uhd))
     }
 
     /** Claves de unidad cifradas de Unit_Key_RO.inf: tabla en `uk_pos`; número de claves (16 bits) y entradas de 48 bytes desde uk_pos+48. */
@@ -117,6 +120,9 @@ object Aacs {
     }
 }
 
+/** Ninguna clave de la entrada de KEYDB.cfg descifra el disco. */
+class AacsKeyException(msg: String) : IOException(msg)
+
 /** Un fichero .m2ts de un Blu-ray AACS que se entrega descifrado. Las unidades sin cifrar pasan tal cual. */
 class AacsFile(private val inner: DiscFile, private val keys: List<ByteArray>) : DiscFile {
     override val size: Long get() = inner.size
@@ -143,7 +149,7 @@ class AacsFile(private val inner: DiscFile, private val keys: List<ByteArray>) :
             val t = unit.copyOf()
             if (Aacs.decryptUnit(ukCiphers[i], cbc, t, 0)) { keyIdx = i; return }
         }
-        throw IOException("Ninguna clave de tu KEYDB.cfg descifra este disco (¿entrada incorrecta o BD+/AACS no soportado?).")
+        throw AacsKeyException("Ninguna clave de tu KEYDB.cfg descifra este disco (¿entrada incorrecta o BD+/AACS no soportado?).")
     }
 
     private fun readFully(pos: Long, dst: ByteArray, len: Int, dstOff: Int = 0): Int {
