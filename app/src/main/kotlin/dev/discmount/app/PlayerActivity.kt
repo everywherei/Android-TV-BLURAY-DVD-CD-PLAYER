@@ -241,6 +241,16 @@ class PlayerActivity : Activity() {
         if (softVideo) {
             media.setHWDecoderEnabled(false, false)
             media.addOption(":codec=avcodec,all")
+            // Ajustes de rendimiento para descodificar por software (VC-1, etc.) en CPUs de TV:
+            val cores = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+            media.addOption(":avcodec-threads=$cores")       // todos los núcleos disponibles
+            media.addOption(":avcodec-fast")                  // atajos de descodificación (calidad prácticamente igual)
+            media.addOption(":avcodec-dr")                    // render directo: evita copias de cada fotograma
+            media.addOption(":drop-late-frames")              // si no llega a tiempo, descarta fotogramas en vez de ir a tirones
+            media.addOption(":skip-frames")
+            media.addOption(":file-caching=3000")             // más búfer: la lectura USB no corta la imagen
+            media.addOption(":clock-jitter=0")
+            media.addOption(":clock-synchro=0")
         }
         voutCount = 0
         mp.media = media
