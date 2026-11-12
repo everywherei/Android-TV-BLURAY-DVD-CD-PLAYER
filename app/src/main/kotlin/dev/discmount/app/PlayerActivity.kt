@@ -5,6 +5,7 @@ package dev.discmount.app
 
 import android.app.Activity
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
@@ -190,12 +191,26 @@ class PlayerActivity : Activity() {
     private var resumeAt = 0L
     private var voutCount = 0
 
+    /** Tipos de HDR que admite la pantalla (HDR10, HLG, Dolby Vision, HDR10+). El HDR llega a la tele por el decodificador hardware. */
+    @Suppress("DEPRECATION")
+    private fun hdrLine(): String {
+        val types = try {
+            val d = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+            if (Build.VERSION.SDK_INT >= 34) d?.mode?.supportedHdrTypes else d?.hdrCapabilities?.supportedHdrTypes
+        } catch (e: Exception) { null }
+        val names = types?.mapNotNull {
+            when (it) { 1 -> "Dolby Vision"; 2 -> "HDR10"; 3 -> "HLG"; 4 -> "HDR10+"; else -> null }
+        }.orEmpty().distinct()
+        return if (names.isEmpty()) I18n.t("hdr_none") else I18n.t("hdr_display", names.joinToString(" · "))
+    }
+
     private fun checkVideo(last: Boolean) {
         val mp = player ?: return
         if (audioMode || softVideo || softTried) return
         val media = mp.media ?: return
         var hasVideo = false
         var vc1 = false
+        var hdrCodec = false
         try {
             for (i in 0 until media.trackCount) {
                 val t = media.getTrack(i)
@@ -203,12 +218,14 @@ class PlayerActivity : Activity() {
                     hasVideo = true
                     val c = "${t.codec} ${t.originalCodec}".lowercase()
                     if (listOf("wvc1", "wmv3", "wmva", "vc1", "vc-1").any { c.contains(it) }) vc1 = true
+                    // HEVC / AV1 / VP9 son los códecs del HDR: por software serían inviables (4K) y se perdería el HDR.
+                    if (listOf("hevc", "hvc1", "hev1", "h265", "av01", "av1", "vp09", "vp9").any { c.contains(it) }) hdrCodec = true
                 }
             }
         } finally { media.release() }
         // VC-1: muchos decodificadores hardware de Android TV no lo soportan (audio sin imagen). Cualquier otro códec
         // de vídeo que siga sin ventana de vídeo tras unos segundos también pasa a software.
-        if (vc1 || (last && hasVideo && voutCount == 0)) {
+        if (vc1 || (last && hasVideo && voutCount == 0 && !hdrCodec)) {
             softTried = true
             softVideo = true
             resumeAt = mp.time
@@ -297,7 +314,7 @@ class PlayerActivity : Activity() {
                         runOnUiThread {
                             if (audioMode) hud.visibility = View.GONE
                             else {
-                                showHud(currentTitle(), 3000)
+                                showHud(currentTitle() + "\n" + hdrLine(), 3000)
                                 ui.postDelayed({ audioCheck() }, 3000)
                             }
                         }
