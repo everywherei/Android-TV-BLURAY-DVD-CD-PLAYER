@@ -3,8 +3,7 @@
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android%20TV%20%2F%20Google%20TV-green)
 ![minSdk](https://img.shields.io/badge/minSdk-26-informational)
-<p align="center"> <img src="docs/xSLGZXQ.jpeg"> 
- License: GPL v3+ Platform minSdk
+
 **Play and browse CDs, DVDs and Blu-ray discs from a USB optical drive on Android TV / Google TV — no kernel drivers, no root.**
 
 DiscMount talks SCSI/MMC directly to the drive over USB (Bulk-Only Transport) and reads UDF / ISO 9660 in user space, in the spirit of
@@ -25,7 +24,7 @@ MLUSB Mounter. Playback is handled by LibVLC. The whole interface is remote-cont
 - **Blu-ray (AACS):** *Play Blu-ray movie* picks the main playlist and decrypts `.m2ts` streams on the fly using **your own `KEYDB.cfg`** (see below).
 - **Files app integration:** a `DocumentsProvider` exposes the mounted disc to Android's file picker, so VLC and other apps can open files on it.
 - **11 interface languages:** English (default), Français, Deutsch, 日本語, Español, Italiano, Nederlands, Português, 한국어, Русский, Català. Tap the flag at the top right to switch.
-<img src="https://i.imgur.com/BiwxWyN.jpeg" alt="Descripción de la imagen" width="100%"> VIDEO DEMO https://youtu.be/kLmdMa___uI?si=bYNfJQtAp-3qLaYO
+
 ## Blu-ray and `KEYDB.cfg`
 
 1. Tap **Import KEYDB.cfg** and pick your key file, or copy it to `/sdcard/Android/data/dev.discmount/files/KEYDB.cfg` (for example with `adb push`).
@@ -39,6 +38,27 @@ Limitations:
 - **Ultra HD Blu-ray (AACS 2.0) is experimental:** it only works if your `KEYDB.cfg` has a VUK (or unit keys) for the disc, and it assumes the bulk stream encryption is the same as AACS 1.0. It has not been verified on real UHD discs. DiscMount has no AACS 2.0 drive authentication, so a drive that can read UHD discs (e.g. one with custom firmware) is needed. 4K/HDR output depends on your device and LibVLC.
 - The AACS code is original and was tested with synthetic data and on real Blu-ray discs by the author; coverage of all disc types is not guaranteed.
 - DiscMount ships **no keys**. You are responsible for obtaining a key file lawfully, for discs you own.
+
+## HDR and playback engines
+
+DiscMount has two playback engines:
+
+- **VLC** (LibVLC): plays almost everything, including every audio format and disc subtitles, but LibVLC 3.x does not signal HDR to the TV.
+- **HDR engine** (AndroidX Media3 / ExoPlayer): decodes through MediaCodec and hands the video colour information to the TV, so HDR10, HDR10+, HLG and Dolby Vision (base layer) can switch the display to HDR. It only plays the audio formats your device supports (e.g. AC-3/E-AC-3/DTS, not TrueHD/DTS-HD) and has no disc subtitles.
+
+Ultra HD Blu-ray discs start in the HDR engine. You can switch engines at any time (same position) from the **Video / HDR** menu of the on-screen controls. If the HDR engine fails, the app falls back to VLC automatically.
+
+## Remote control
+
+| Key | Playing (controls hidden) | Controls visible |
+|---|---|---|
+| **↓ / ↑ / MENU / INFO** | Show the controls | Move between the timeline and the buttons (MENU/INFO hide them) |
+| **← / →** | Show the timeline and skip ±10 s (hold to go faster, up to 2 min) | On the timeline: seek; on the buttons: move |
+| **OK** | Play / pause | Press the focused control (on the timeline: play / pause) |
+| **Back** | Exit | Close the menu, then the controls |
+| Media keys | Play/pause, ±30 s, previous/next, stop | Same |
+
+The control bar has a timeline, previous/next, ±10 s, play/pause and the menus **Audio**, **Subtitles**, **Video / HDR** (engine, HDR window mode), **Speed** and **Info** (engine, video/audio codec, HDR, display, frames, position). It hides itself after 6 seconds while playing and stays visible while paused.
 
 ## Requirements
 

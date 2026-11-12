@@ -49,6 +49,10 @@ class PlayerActivity : Activity() {
     private val ticker = object : Runnable {
         override fun run() { updateInfo(); ui.postDelayed(this, 500) }
     }
+    private lateinit var rootLayout: FrameLayout
+    private lateinit var overlay: PlayerOverlay
+    private var windowHdr = false
+    private var speed = 1f
     private var exo: ExoEngine? = null
     private var useExo = false            // motor activo: false = LibVLC, true = Media3 (HDR)
     private var userChoseEngine = false   // el usuario cambió de motor con MENU: no elegir automáticamente
@@ -64,7 +68,8 @@ class PlayerActivity : Activity() {
         super.onCreate(savedInstanceState)
         I18n.load(this)
         // Si la pantalla admite HDR, pide el modo de color HDR para esta ventana (necesario en algunas teles para activar el HDR).
-        if (Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()) window.colorMode = ActivityInfo.COLOR_MODE_HDR
+        windowHdr = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
+        if (windowHdr) window.colorMode = ActivityInfo.COLOR_MODE_HDR
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         surface = SurfaceView(this)
         hud = TextView(this).apply {
@@ -77,6 +82,8 @@ class PlayerActivity : Activity() {
         }
         root.addView(info, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         root.addView(hud, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
+        rootLayout = root
+        overlay = PlayerOverlay(this, root, overlayHost)
         setContentView(root)
 
         val path = intent.getStringExtra(EXTRA_PATH) ?: return finish()
@@ -101,6 +108,8 @@ class PlayerActivity : Activity() {
         diagShown = false
         paused = false
         engineHint = false
+        speed = 1f
+        if (::overlay.isInitialized) overlay.hide()
         info.visibility = if (audioMode) View.VISIBLE else View.GONE
         ui.removeCallbacks(ticker)
         if (audioMode) ui.post(ticker)
@@ -262,6 +271,7 @@ class PlayerActivity : Activity() {
             }, 3500)
         }
         override fun onEnded() = runOnUiThread { skip(+1) }
+        override fun onVideoSize(width: Int, height: Int, pixelRatio: Float) = runOnUiThread { fitExoSurface(width, height, pixelRatio) }
         override fun onError(message: String) = runOnUiThread {
             // Si el motor HDR falla, se vuelve automáticamente a LibVLC en la misma posición.
             if (!exoFailed) {
@@ -295,6 +305,7 @@ class PlayerActivity : Activity() {
     /** MENU / INFO / Y: cambia entre LibVLC (todos los formatos de audio y subtítulos) y Media3 (HDR). */
     private fun switchEngine() {
         if (audioMode) return
+        overlay.hide()
         resumeAt = curTime()
         userChoseEngine = true
         useExo = !useExo
@@ -317,6 +328,7 @@ class PlayerActivity : Activity() {
     private fun start(file: DiscFile) {
         if (useExo) { startExo(file); return }
         releaseExo()
+        surface.layoutParams = FrameLayout.LayoutParams(-1, -1)
         var mp = player
         if (mp == null) {
             aout = getSharedPreferences("discmount", MODE_PRIVATE).getString("aout", "auto") ?: "auto"
@@ -454,74 +466,206 @@ class PlayerActivity : Activity() {
         return "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60)
     }
 
-    private fun cycleAudio() {
-        exo?.let { e ->
-            val d = e.cycleAudio()
-            showHud(if (d == null) I18n.t("no_audio") else I18n.t("audio_label", d), 3000)
-            return
+    // ------------------------------------------------------------------ controles en pantalla
+
+    private fun isPlayingNow(): Boolean = exo?.isPlaying ?: player?.isPlaying ?: false
+
+    private fun setTime(ms: Long) {
+        val e = exo
+        if (e != null) e.seekTo(ms) else player?.time = ms
+    }
+
+    private fun playNow() { exo?.play() ?: player?.play(); paused = false }
+    private fun pauseNow() { exo?.pause() ?: player?.pause(); paused = true }
+
+    private fun togglePlay() {
+        if (isPlayingNow() && !paused) pauseNow() else playNow()
+        if (!audioMode) { if (paused) overlay.show(false) else overlay.touch() }
+    }
+
+    private fun engineBadge(): String {
+        val e = exo
+        return if (e != null) e.describe().removePrefix("Media3 · ") else "VLC" + (if (softVideo) " · SW" else "")
+    }
+
+    private fun fitExoSurface(w: Int, h: Int, par: Float) {
+        if (w <= 0 || h <= 0 || exo == null) return
+        val pw = rootLayout.width
+        val ph = rootLayout.height
+        if (pw <= 0 || ph <= 0) return
+        val ar = w * par / h
+        var tw = pw
+        var th = (pw / ar).toInt()
+        if (th > ph) { th = ph; tw = (ph * ar).toInt() }
+        surface.layoutParams = FrameLayout.LayoutParams(tw, th, Gravity.CENTER)
+    }
+
+    private val overlayHost = object : PlayerOverlay.Host {
+        override fun isPlaying() = !paused && isPlayingNow()
+        override fun togglePlay() = this@PlayerActivity.togglePlay()
+        override fun time() = curTime()
+        override fun length() = curLen()
+        override fun seekTo(ms: Long) = setTime(ms.coerceAtLeast(0))
+        override fun hasPlaylist() = playlist.size > 1
+        override fun skip(delta: Int) = this@PlayerActivity.skip(delta)
+        override fun title() = currentTitle()
+        override fun badge() = engineBadge()
+        override fun openAudio() = openAudioMenu()
+        override fun openSubs() = openSubsMenu()
+        override fun openVideo() = openVideoMenu()
+        override fun openSpeed() = openSpeedMenu()
+        override fun openInfo() = openInfoPanel()
+    }
+
+    private fun openAudioMenu() {
+        val items = ArrayList<PlayerOverlay.Item>()
+        val e = exo
+        if (e != null) {
+            e.audioChoices().forEachIndexed { i, c ->
+                items += PlayerOverlay.Item(c.label + (if (c.supported) "" else "   " + I18n.t("m_unsupported")), c.selected, c.supported) { e.selectAudio(i) }
+            }
+        } else {
+            val mp = player
+            mp?.audioTracks?.toList().orEmpty().forEach { t ->
+                items += PlayerOverlay.Item(if (t.id < 0) I18n.t("m_disabled") else t.name, t.id == mp?.audioTrack) { mp?.audioTrack = t.id }
+            }
         }
-        val mp = player ?: return
-        val tracks = mp.audioTracks?.filter { it.id >= 0 } ?: return
-        if (tracks.isEmpty()) return showHud(I18n.t("no_audio"), 2000)
-        val i = tracks.indexOfFirst { it.id == mp.audioTrack }
-        val next = tracks[(i + 1) % tracks.size]
-        mp.audioTrack = next.id
-        showHud(I18n.t("audio_label", next.name), 3000)
+        if (items.isEmpty()) items += PlayerOverlay.Item(I18n.t("no_audio"), false, false) {}
+        overlay.showMenu(I18n.t("m_audio_title"), items)
     }
 
-    private fun cycleSubs() {
-        if (exo != null) return showHud(I18n.t("exo_subs"), 4000)
-        val mp = player ?: return
-        val tracks = mp.spuTracks ?: return
-        if (tracks.isEmpty()) return showHud(I18n.t("no_subs"), 2000)
-        val i = tracks.indexOfFirst { it.id == mp.spuTrack }
-        val next = tracks[(i + 1) % tracks.size]
-        mp.spuTrack = next.id
-        showHud(I18n.t("subs", if (next.id < 0) I18n.t("subs_off") else next.name), 3000)
-    }
-
-    private fun exoKey(e: ExoEngine, keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> {
-                if (e.isPlaying) { e.pause(); paused = true; showHud(I18n.t("pause", fmt(e.time)), 60_000) } else { e.play(); paused = false; hud.visibility = View.GONE }
+    private fun openSubsMenu() {
+        val items = ArrayList<PlayerOverlay.Item>()
+        if (exo != null) {
+            items += PlayerOverlay.Item(I18n.t("m_subs_vlc_only")) { switchEngine() }
+        } else {
+            val mp = player
+            mp?.spuTracks?.toList().orEmpty().forEach { t ->
+                items += PlayerOverlay.Item(if (t.id < 0) I18n.t("m_disabled") else t.name, t.id == mp?.spuTrack) { mp?.spuTrack = t.id }
             }
-            KeyEvent.KEYCODE_MEDIA_PLAY -> { e.play(); paused = false; hud.visibility = View.GONE }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { e.pause(); paused = true }
-            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> seek(10_000)
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> seek(-10_000)
-            KeyEvent.KEYCODE_DPAD_UP -> cycleAudio()
-            KeyEvent.KEYCODE_DPAD_DOWN -> cycleSubs()
-            KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> skip(+1)
-            KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> {
-                if (e.time > 3000) e.seekTo(0) else skip(-1)
-            }
-            KeyEvent.KEYCODE_MEDIA_STOP -> finish()
-            else -> return super.onKeyDown(keyCode, event)
+            if (items.isEmpty()) items += PlayerOverlay.Item(I18n.t("no_subs"), false, false) {}
         }
-        return true
+        overlay.showMenu(I18n.t("m_subs_title"), items)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_BUTTON_Y ||
-            keyCode == KeyEvent.KEYCODE_PROG_YELLOW) { switchEngine(); return true }
-        exo?.let { return exoKey(it, keyCode, event) }
-        val mp = player ?: return super.onKeyDown(keyCode, event)
+    private fun toggleWindowHdr() {
+        windowHdr = !windowHdr
+        if (Build.VERSION.SDK_INT >= 26) window.colorMode = if (windowHdr) ActivityInfo.COLOR_MODE_HDR else ActivityInfo.COLOR_MODE_DEFAULT
+        showHud(I18n.t("m_window_hdr", I18n.t(if (windowHdr) "m_on" else "m_off")), 3000)
+    }
+
+    private fun openVideoMenu() {
+        val hdrOk = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
+        val items = listOf(
+            PlayerOverlay.Item(I18n.t("m_engine_exo"), useExo) { if (!useExo) switchEngine() },
+            PlayerOverlay.Item(I18n.t("m_engine_vlc"), !useExo) { if (useExo) switchEngine() },
+            PlayerOverlay.Item(I18n.t("m_window_hdr", I18n.t(if (windowHdr) "m_on" else "m_off")), false, hdrOk) { toggleWindowHdr() },
+        )
+        overlay.showMenu(I18n.t("m_video_title"), items)
+    }
+
+    private fun openSpeedMenu() {
+        val items = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).map { v ->
+            PlayerOverlay.Item("${v}x", Math.abs(speed - v) < 0.01f) {
+                speed = v
+                val e = exo
+                if (e != null) e.setSpeed(v) else player?.rate = v
+            }
+        }
+        overlay.showMenu(I18n.t("m_speed_title"), items)
+    }
+
+    private fun openInfoPanel() = overlay.showInfo(I18n.t("m_info_title")) { infoText() }
+
+    private fun infoText(): String {
+        val sb = StringBuilder()
+        fun line(key: String, value: String) { if (value.isNotEmpty()) sb.append(I18n.t(key).padEnd(11)).append(value).append('\n') }
+        val e = exo
+        line("i_engine", if (e != null) "HDR · Media3" else "VLC · " + (if (softVideo) "SW" else "HW"))
+        line("i_file", currentTitle())
+        if (e != null) {
+            line("i_video", e.describe().removePrefix("Media3 · "))
+        } else {
+            var v = ""
+            val a = ArrayList<String>()
+            var shown = -1
+            var lost = -1
+            player?.media?.let { m ->
+                try {
+                    for (i in 0 until m.trackCount) {
+                        val t = m.getTrack(i)
+                        if (t is IMedia.VideoTrack) {
+                            v = "${t.width}x${t.height} · ${t.codec}" +
+                                (if (t.frameRateDen > 0) " · %.3f fps".format(t.frameRateNum.toDouble() / t.frameRateDen) else "")
+                        } else if (t is IMedia.AudioTrack) {
+                            a += "${t.codec} ${t.channels}ch ${t.rate / 1000}kHz"
+                        }
+                    }
+                    val st = m.stats
+                    if (st != null) { shown = st.displayedPictures; lost = st.lostPictures }
+                } catch (ex: Exception) { } finally { m.release() }
+            }
+            line("i_video", v)
+            line("i_audio", a.joinToString(" | "))
+            if (shown >= 0) line("i_frames", "$shown / $lost")
+        }
+        line("i_display", hdrLine().substringAfter(": "))
+        line("i_position", fmt(curTime()) + " / " + fmt(curLen()))
+        return sb.toString().trimEnd()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && !audioMode && ::overlay.isInitialized) overlay.touch()
+        return super.dispatchKeyEvent(event)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (::overlay.isInitialized && overlay.back()) return
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (player == null && exo == null) return super.onKeyDown(keyCode, event)
+        // Teclas multimedia del mando: funcionan siempre.
         when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> {
-                if (mp.isPlaying) { mp.pause(); paused = true; if (!audioMode) showHud(I18n.t("pause", fmt(mp.time)), 60_000) } else { mp.play(); paused = false; hud.visibility = View.GONE }
-            }
-            KeyEvent.KEYCODE_MEDIA_PLAY -> { mp.play(); paused = false; hud.visibility = View.GONE }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { mp.pause(); paused = true }
-            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> seek(10_000)
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> seek(-10_000)
-            KeyEvent.KEYCODE_DPAD_UP -> if (audioMode) skip(-1) else cycleAudio()
-            KeyEvent.KEYCODE_DPAD_DOWN -> if (audioMode) skip(+1) else cycleSubs()
-            KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> skip(+1)
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlay(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { playNow(); if (!audioMode) overlay.touch(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { pauseNow(); if (!audioMode) overlay.show(false); return true }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seek(30_000); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { seek(-30_000); return true }
+            KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> { skip(+1); return true }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> {
-                // Si la pista lleva más de 3 s suena desde el principio; si no, pasa a la anterior.
-                if (mp.time > 3000) mp.time = 0 else skip(-1)
+                if (curTime() > 3000) setTime(0) else skip(-1)
+                return true
             }
-            KeyEvent.KEYCODE_MEDIA_STOP -> finish()
+            KeyEvent.KEYCODE_MEDIA_STOP -> { finish(); return true }
+        }
+        if (audioMode) {
+            // Música: pantalla simple con la información de la pista.
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> togglePlay()
+                KeyEvent.KEYCODE_DPAD_RIGHT -> seek(10_000)
+                KeyEvent.KEYCODE_DPAD_LEFT -> seek(-10_000)
+                KeyEvent.KEYCODE_DPAD_UP -> skip(-1)
+                KeyEvent.KEYCODE_DPAD_DOWN -> skip(+1)
+                else -> return super.onKeyDown(keyCode, event)
+            }
+            return true
+        }
+        // Vídeo con la barra desplegada: el foco se mueve con las flechas; MENÚ/INFO la cierran.
+        if (overlay.visible) {
+            if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO) { overlay.hide(); return true }
+            return super.onKeyDown(keyCode, event)
+        }
+        // Vídeo con la barra oculta.
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> togglePlay()
+            KeyEvent.KEYCODE_DPAD_LEFT -> { overlay.show(); overlay.seekKey(-1, event.repeatCount) }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { overlay.show(); overlay.seekKey(+1, event.repeatCount) }
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO,
+            KeyEvent.KEYCODE_BUTTON_Y, KeyEvent.KEYCODE_PROG_YELLOW -> overlay.show()
             else -> return super.onKeyDown(keyCode, event)
         }
         return true

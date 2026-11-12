@@ -16,6 +16,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSourceException
@@ -75,6 +76,7 @@ class ExoEngine(ctx: Context, surface: SurfaceView, private val cb: Callback) {
         fun onReady()
         fun onEnded()
         fun onError(message: String)
+        fun onVideoSize(width: Int, height: Int, pixelRatio: Float)
     }
 
     private var file: DiscFile? = null
@@ -105,6 +107,9 @@ class ExoEngine(ctx: Context, surface: SurfaceView, private val cb: Callback) {
             }
             override fun onPlayerError(error: PlaybackException) {
                 cb.onError("${error.errorCodeName}${error.cause?.message?.let { ": $it" } ?: ""}")
+            }
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                cb.onVideoSize(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
             }
             override fun onTracksChanged(tracks: Tracks) {
                 val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
@@ -139,6 +144,21 @@ class ExoEngine(ctx: Context, surface: SurfaceView, private val cb: Callback) {
         val ch = f.channelCount.takeIf { it > 0 }?.let { "${it}ch" }
         return listOfNotNull(lang, codec, ch).joinToString(" ").ifEmpty { f.id ?: "?" }
     }
+
+    class AudioChoice(val label: String, val supported: Boolean, val selected: Boolean)
+
+    private fun audioGroups() = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+
+    fun audioChoices(): List<AudioChoice> = audioGroups().map { AudioChoice(label(it.getTrackFormat(0)), it.isSupported, it.isSelected) }
+
+    fun selectAudio(index: Int) {
+        val g = audioGroups().getOrNull(index) ?: return
+        if (!g.isSupported) return
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, 0)).build()
+    }
+
+    fun setSpeed(speed: Float) = player.setPlaybackSpeed(speed)
 
     /** Pasa a la siguiente pista de audio reproducible. Devuelve su descripción, o null si no hay. */
     fun cycleAudio(): String? {
