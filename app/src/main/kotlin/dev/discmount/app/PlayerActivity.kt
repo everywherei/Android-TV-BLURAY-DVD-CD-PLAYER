@@ -53,6 +53,7 @@ class PlayerActivity : Activity() {
     private lateinit var overlay: PlayerOverlay
     private var windowHdr = false
     private var speed = 1f
+    private var preferHdr10 = false     // motor HDR: ignorar Dolby Vision y usar la capa base HDR10
     private var exo: ExoEngine? = null
     private var useExo = false            // motor activo: false = LibVLC, true = Media3 (HDR)
     private var userChoseEngine = false   // el usuario cambió de motor con MENU: no elegir automáticamente
@@ -68,6 +69,7 @@ class PlayerActivity : Activity() {
         super.onCreate(savedInstanceState)
         I18n.load(this)
         // Si la pantalla admite HDR, pide el modo de color HDR para esta ventana (necesario en algunas teles para activar el HDR).
+        preferHdr10 = getSharedPreferences("discmount", MODE_PRIVATE).getBoolean("prefer_hdr10", false)
         windowHdr = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
         if (windowHdr) window.colorMode = ActivityInfo.COLOR_MODE_HDR
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -319,7 +321,7 @@ class PlayerActivity : Activity() {
         releaseVlc()
         releaseExo()
         paused = false
-        val e = ExoEngine(this, surface, exoCb)
+        val e = ExoEngine(this, surface, exoCb, preferHdr10)
         exo = e
         e.start(file, resumeAt)
         resumeAt = 0
@@ -556,12 +558,29 @@ class PlayerActivity : Activity() {
 
     private fun openVideoMenu() {
         val hdrOk = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
+        val avail = exo?.available() ?: emptyList()
+        val hasDv = "Dolby Vision" in avail
         val items = listOf(
+            PlayerOverlay.Item(I18n.t("m_hdr_avail", if (avail.isEmpty()) "—" else avail.joinToString(" · ")), false, false) {},
             PlayerOverlay.Item(I18n.t("m_engine_exo"), useExo) { if (!useExo) switchEngine() },
             PlayerOverlay.Item(I18n.t("m_engine_vlc"), !useExo) { if (useExo) switchEngine() },
+            PlayerOverlay.Item(I18n.t("m_hdr_auto"), !preferHdr10, useExo) { setPreferHdr10(false) },
+            PlayerOverlay.Item(I18n.t("m_hdr_dv"), !preferHdr10 && hasDv, useExo && hasDv) { setPreferHdr10(false) },
+            PlayerOverlay.Item(I18n.t("m_hdr_hdr10"), preferHdr10, useExo) { setPreferHdr10(true) },
             PlayerOverlay.Item(I18n.t("m_window_hdr", I18n.t(if (windowHdr) "m_on" else "m_off")), false, hdrOk) { toggleWindowHdr() },
         )
         overlay.showMenu(I18n.t("m_video_title"), items)
+    }
+
+    /** Cambia entre «automático» (Dolby Vision si el vídeo lo trae) y «forzar HDR10». Reinicia el motor HDR en la misma posición. */
+    private fun setPreferHdr10(value: Boolean) {
+        if (preferHdr10 == value) return
+        preferHdr10 = value
+        getSharedPreferences("discmount", MODE_PRIVATE).edit().putBoolean("prefer_hdr10", value).apply()
+        overlay.hide()
+        resumeAt = curTime()
+        releaseExo(); releaseVlc()
+        loadCurrent()
     }
 
     private fun openSpeedMenu() {
