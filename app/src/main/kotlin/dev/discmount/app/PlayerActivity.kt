@@ -5,6 +5,7 @@ package dev.discmount.app
 
 import android.app.Activity
 import android.os.Bundle
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -57,6 +58,8 @@ class PlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         I18n.load(this)
+        // Si la pantalla admite HDR, pide el modo de color HDR para esta ventana (necesario en algunas teles para activar el HDR).
+        if (Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()) window.colorMode = ActivityInfo.COLOR_MODE_HDR
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         surface = SurfaceView(this)
         hud = TextView(this).apply {
@@ -193,14 +196,18 @@ class PlayerActivity : Activity() {
 
     /** Tipos de HDR que admite la pantalla (HDR10, HLG, Dolby Vision, HDR10+). El HDR llega a la tele por el decodificador hardware. */
     @Suppress("DEPRECATION")
-    private fun hdrLine(): String {
+    private fun hdrTypes(): List<String> {
         val types = try {
-            val d = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+            val d = windowManager.defaultDisplay
             if (Build.VERSION.SDK_INT >= 34) d?.mode?.supportedHdrTypes else d?.hdrCapabilities?.supportedHdrTypes
         } catch (e: Exception) { null }
-        val names: List<String> = (types?.toList() ?: emptyList<Int>()).mapNotNull { t ->
+        return (types?.toList() ?: emptyList<Int>()).mapNotNull { t ->
             when (t) { 1 -> "Dolby Vision"; 2 -> "HDR10"; 3 -> "HLG"; 4 -> "HDR10+"; else -> null }
         }.distinct()
+    }
+
+    private fun hdrLine(): String {
+        val names = hdrTypes()
         return if (names.isEmpty()) I18n.t("hdr_none") else I18n.t("hdr_display", names.joinToString(" · "))
     }
 
@@ -255,6 +262,10 @@ class PlayerActivity : Activity() {
         val fd = DiscProxy.open(this, file)
         pfd = fd
         val media = Media(vlc, fd.fileDescriptor)
+        if (!softVideo) {
+            // Decodificación hardware (MediaCodec) directa a la superficie: es el único camino por el que el HDR llega a la tele.
+            media.setHWDecoderEnabled(true, true)
+        }
         if (softVideo) {
             media.setHWDecoderEnabled(false, false)
             media.addOption(":codec=avcodec,all")
