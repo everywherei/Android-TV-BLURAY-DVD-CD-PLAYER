@@ -198,9 +198,9 @@ class PlayerActivity : Activity() {
             val d = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
             if (Build.VERSION.SDK_INT >= 34) d?.mode?.supportedHdrTypes else d?.hdrCapabilities?.supportedHdrTypes
         } catch (e: Exception) { null }
-        val names = types?.mapNotNull {
-            when (it) { 1 -> "Dolby Vision"; 2 -> "HDR10"; 3 -> "HLG"; 4 -> "HDR10+"; else -> null }
-        }.orEmpty().distinct()
+        val names: List<String> = (types?.toList() ?: emptyList<Int>()).mapNotNull { t ->
+            when (t) { 1 -> "Dolby Vision"; 2 -> "HDR10"; 3 -> "HLG"; 4 -> "HDR10+"; else -> null }
+        }.distinct()
         return if (names.isEmpty()) I18n.t("hdr_none") else I18n.t("hdr_display", names.joinToString(" · "))
     }
 
