@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025-2026 DiscMount contributors
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -31,4 +34,5 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation("org.videolan.android:libvlc-all:3.6.0")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")   // motor alternativo para HDR (Apache-2.0)
 }

@@ -49,6 +49,11 @@ class PlayerActivity : Activity() {
     private val ticker = object : Runnable {
         override fun run() { updateInfo(); ui.postDelayed(this, 500) }
     }
+    private var exo: ExoEngine? = null
+    private var useExo = false            // motor activo: false = LibVLC, true = Media3 (HDR)
+    private var userChoseEngine = false   // el usuario cambió de motor con MENU: no elegir automáticamente
+    private var exoFailed = false
+    @Volatile private var engineHint = false  // el disco pide el motor HDR (UHD)
     private var libVLC: LibVLC? = null
     private var player: MediaPlayer? = null
     private var pfd: ParcelFileDescriptor? = null
@@ -95,6 +100,7 @@ class PlayerActivity : Activity() {
         audioMode = isAudioPath(path)
         diagShown = false
         paused = false
+        engineHint = false
         info.visibility = if (audioMode) View.VISIBLE else View.GONE
         ui.removeCallbacks(ticker)
         if (audioMode) ui.post(ticker)
@@ -103,7 +109,12 @@ class PlayerActivity : Activity() {
         Thread {
             try {
                 val file = openFile(path)
-                runOnUiThread { if (gen == loadGen && !isDestroyed) start(file) else runCatching { file.close() } }
+                runOnUiThread {
+                    if (gen == loadGen && !isDestroyed) {
+                        if (engineHint && !userChoseEngine && !exoFailed && !audioMode) useExo = true
+                        start(file)
+                    } else runCatching { file.close() }
+                }
             } catch (e: Exception) {
                 runOnUiThread { showHud(I18n.t("error", e.message ?: ""), 10_000) }
             }
@@ -169,9 +180,10 @@ class PlayerActivity : Activity() {
             pl.clips.map { BdPlaylists.clipPath(it) }
         } else listOf(path)
         var uhd = false
+        engineHint = false
         val keys = when (val r = DiscSession.aacs(this)) {
             is AacsResult.None -> null
-            is AacsResult.Ok -> { uhd = r.keys.uhd; r.keys.unitKeys }
+            is AacsResult.Ok -> { uhd = r.keys.uhd; engineHint = uhd; r.keys.unitKeys }
             is AacsResult.Failed -> throw IllegalStateException(I18n.aacs(r))
         }
         if (keys != null && fs.stat("/BDSVM") != null) runOnUiThread { showHud(I18n.t("bdplus_warn"), 5000) }
@@ -241,7 +253,70 @@ class PlayerActivity : Activity() {
         }
     }
 
+    private val exoCb = object : ExoEngine.Callback {
+        override fun onReady() = runOnUiThread {
+            val e = exo ?: return@runOnUiThread
+            showHud(currentTitle() + "\n" + hdrLine() + "\n" + e.describe(), 5000)
+            ui.postDelayed({
+                if (exo === e && !e.hasPlayableAudio) showHud(I18n.t("exo_no_audio"), 12_000)
+            }, 3500)
+        }
+        override fun onEnded() = runOnUiThread { skip(+1) }
+        override fun onError(message: String) = runOnUiThread {
+            // Si el motor HDR falla, se vuelve automáticamente a LibVLC en la misma posición.
+            if (!exoFailed) {
+                exoFailed = true
+                resumeAt = curTime()
+                releaseExo()
+                useExo = false
+                showHud(I18n.t("exo_error", message), 6000)
+                loadCurrent()
+            } else showHud(I18n.t("exo_error", message), 15_000)
+        }
+    }
+
+    private fun releaseExo() { runCatching { exo?.release() }; exo = null }
+
+    private fun releaseVlc() {
+        player?.let {
+            runCatching { it.setEventListener(null) }
+            runCatching { it.stop() }
+            runCatching { it.vlcVout.detachViews() }
+            runCatching { it.release() }
+        }
+        runCatching { libVLC?.release() }
+        runCatching { pfd?.close() }
+        player = null; libVLC = null; pfd = null
+    }
+
+    private fun curTime(): Long = exo?.time ?: player?.time ?: 0L
+    private fun curLen(): Long = exo?.length ?: player?.length ?: 0L
+
+    /** MENU / INFO / Y: cambia entre LibVLC (todos los formatos de audio y subtítulos) y Media3 (HDR). */
+    private fun switchEngine() {
+        if (audioMode) return
+        resumeAt = curTime()
+        userChoseEngine = true
+        useExo = !useExo
+        releaseExo(); releaseVlc()
+        softVideo = false; softTried = false
+        showHud(I18n.t(if (useExo) "engine_exo" else "engine_vlc"), 3000)
+        loadCurrent()
+    }
+
+    private fun startExo(file: DiscFile) {
+        releaseVlc()
+        releaseExo()
+        paused = false
+        val e = ExoEngine(this, surface, exoCb)
+        exo = e
+        e.start(file, resumeAt)
+        resumeAt = 0
+    }
+
     private fun start(file: DiscFile) {
+        if (useExo) { startExo(file); return }
+        releaseExo()
         var mp = player
         if (mp == null) {
             aout = getSharedPreferences("discmount", MODE_PRIVATE).getString("aout", "auto") ?: "auto"
@@ -362,10 +437,10 @@ class PlayerActivity : Activity() {
     }
 
     private fun seek(deltaMs: Long) {
-        val mp = player ?: return
-        val len = mp.length
-        val t = (mp.time + deltaMs).coerceIn(0, if (len > 0) len else Long.MAX_VALUE)
-        mp.time = t
+        if (player == null && exo == null) return
+        val len = curLen()
+        val t = (curTime() + deltaMs).coerceIn(0, if (len > 0) len else Long.MAX_VALUE)
+        exo?.seekTo(t) ?: run { player?.time = t }
         showHud(fmt(t) + " / " + fmt(len), 2000)
     }
 
@@ -380,6 +455,11 @@ class PlayerActivity : Activity() {
     }
 
     private fun cycleAudio() {
+        exo?.let { e ->
+            val d = e.cycleAudio()
+            showHud(if (d == null) I18n.t("no_audio") else I18n.t("audio_label", d), 3000)
+            return
+        }
         val mp = player ?: return
         val tracks = mp.audioTracks?.filter { it.id >= 0 } ?: return
         if (tracks.isEmpty()) return showHud(I18n.t("no_audio"), 2000)
@@ -390,6 +470,7 @@ class PlayerActivity : Activity() {
     }
 
     private fun cycleSubs() {
+        if (exo != null) return showHud(I18n.t("exo_subs"), 4000)
         val mp = player ?: return
         val tracks = mp.spuTracks ?: return
         if (tracks.isEmpty()) return showHud(I18n.t("no_subs"), 2000)
@@ -399,7 +480,31 @@ class PlayerActivity : Activity() {
         showHud(I18n.t("subs", if (next.id < 0) I18n.t("subs_off") else next.name), 3000)
     }
 
+    private fun exoKey(e: ExoEngine, keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> {
+                if (e.isPlaying) { e.pause(); paused = true; showHud(I18n.t("pause", fmt(e.time)), 60_000) } else { e.play(); paused = false; hud.visibility = View.GONE }
+            }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { e.play(); paused = false; hud.visibility = View.GONE }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { e.pause(); paused = true }
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> seek(10_000)
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> seek(-10_000)
+            KeyEvent.KEYCODE_DPAD_UP -> cycleAudio()
+            KeyEvent.KEYCODE_DPAD_DOWN -> cycleSubs()
+            KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> skip(+1)
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> {
+                if (e.time > 3000) e.seekTo(0) else skip(-1)
+            }
+            KeyEvent.KEYCODE_MEDIA_STOP -> finish()
+            else -> return super.onKeyDown(keyCode, event)
+        }
+        return true
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_BUTTON_Y ||
+            keyCode == KeyEvent.KEYCODE_PROG_YELLOW) { switchEngine(); return true }
+        exo?.let { return exoKey(it, keyCode, event) }
         val mp = player ?: return super.onKeyDown(keyCode, event)
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> {
@@ -430,14 +535,8 @@ class PlayerActivity : Activity() {
     override fun onDestroy() {
         loadGen++
         ui.removeCallbacksAndMessages(null)
-        player?.let {
-            runCatching { it.stop() }
-            runCatching { it.vlcVout.detachViews() }
-            runCatching { it.release() }
-        }
-        runCatching { libVLC?.release() }
-        runCatching { pfd?.close() }
-        player = null; libVLC = null; pfd = null
+        releaseExo()
+        releaseVlc()
         super.onDestroy()
     }
 
