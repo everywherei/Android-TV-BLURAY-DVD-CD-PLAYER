@@ -177,6 +177,9 @@ class MainActivity : Activity() {
                     if (s != null) throw IOException(if (s.mediumNotPresent) I18n.t("no_medium") else I18n.t("not_ready", s.toString()))
                     runCatching { drive.readCapacity() }
                     drive.preventRemoval(true)
+                    // Deshace el modo de lectura lento ("modo silencioso") con el que algunas unidades BD
+                    // arrancan o vuelven tras cambiar de disco, antes de empezar a servir bloques.
+                    drive.setMaxSpeed()
                     val profile = drive.currentProfile()
                     setStatus(I18n.t("reading_disc"))
                     // En un CD se lee el TOC para saber si hay pistas de audio.

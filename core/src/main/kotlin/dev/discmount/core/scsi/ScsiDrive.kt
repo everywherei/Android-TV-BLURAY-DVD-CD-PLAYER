@@ -44,8 +44,12 @@ class ScsiDrive(private val scsi: ScsiTransport) : BlockDevice, CddaSource {
     override var blockCount: Long = 0
         private set
 
-    /** Máx. bloques por READ(10). 32 × 2048 = 64 KiB, compatible con casi todos los puentes USB-SATA. */
-    var maxBlocksPerRead = 32
+    /**
+     * Máx. bloques por READ(10). 256 × 2048 = 512 KiB: menos comandos por segundo que con 64 KiB,
+     * lo que ayuda al caudal sostenido que exige el UHD. Si algún puente USB-SATA antiguo da timeouts
+     * o errores de transporte con este tamaño, bajarlo a 64 o 32.
+     */
+    var maxBlocksPerRead = 256
 
     // ---- comandos básicos ----
 
@@ -93,6 +97,17 @@ class ScsiDrive(private val scsi: ScsiTransport) : BlockDevice, CddaSource {
         blockSize = bs
         blockCount = last + 1
         return last to bs
+    }
+
+    /**
+     * SET CD SPEED (0xBB) a velocidad máxima (0xFFFF en lectura y escritura = "sin límite").
+     * Algunas unidades BD arrancan o vuelven a un modo de lectura lento ("modo silencioso") tras
+     * cambiar de disco; esto lo deshace explícitamente. No todas las unidades soportan el comando:
+     * si falla, se ignora y simplemente se queda a la velocidad que ya tuviera.
+     */
+    fun setMaxSpeed() {
+        val cdb = byteArrayOf(0xBB.toByte(), 0, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0, 0, 0, 0, 0, 0)
+        runCatching { run(cdb, DataDirection.NONE, null, 0) }
     }
 
     fun currentProfile(): DiscProfile {
