@@ -307,7 +307,12 @@ class ExoEngine(private val ctx: Context, surface: SurfaceView, private val cb: 
     private fun begin(f: DiscFile, startMs: Long, p: StreamProbe) {
         probe = p
         val base = DefaultExtractorsFactory()
-            .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
+            // En Blu-ray el tipo de flujo TS 0x86 es DTS-HD Master Audio, pero Media3 lo trata como SCTE-35 (inserción de anuncios)
+            // y su decodificador revienta (SpliceInfoDecoder). Se ignora ese flujo: el DTS-HD MA no lo decodifica el dispositivo igualmente.
+            .setTsExtractorFlags(
+                DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or
+                    DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM
+            )
         val extractors = androidx.media3.extractor.ExtractorsFactory {
             base.createExtractors().map { if (!avoidDv && dvDecoder) DvExtractor(it, p) as Extractor else it }.toTypedArray()
         }
