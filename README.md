@@ -45,6 +45,7 @@ DiscMount has two playback engines:
 
 - **VLC** (LibVLC): plays almost everything, including every audio format and disc subtitles, but LibVLC 3.x does not signal HDR to the TV.
 - **HDR engine** (AndroidX Media3 / ExoPlayer): decodes through MediaCodec and hands the video colour information to the TV, so HDR10, HDR10+, HLG and Dolby Vision (base layer) can switch the display to HDR. It only plays the audio formats your device supports (e.g. AC-3/E-AC-3/DTS, not TrueHD/DTS-HD) and has no disc subtitles.
+  The HDR format is chosen automatically (HDR10+ when the stream carries it and the TV reports support, otherwise HDR10, HLG or Dolby Vision) and the player reports which one is active. If a Dolby Vision decoder fails, it falls back to the HDR10 base layer. For UHD it asks the TV for a 4K display mode when the output is lower, and sizes its buffer to the device memory.
 
 Ultra HD Blu-ray discs start in the HDR engine. You can switch engines at any time (same position) from the **Video / HDR** menu of the on-screen controls. If the HDR engine fails, the app falls back to VLC automatically.
 

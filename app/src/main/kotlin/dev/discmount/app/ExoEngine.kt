@@ -5,6 +5,7 @@
 
 package dev.discmount.app
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
 import android.view.SurfaceView
@@ -114,7 +115,10 @@ class StreamProbe {
  * del vídeo (HDR10, HDR10+, HLG, Dolby Vision) junto con la superficie, que es lo que activa el modo HDR de la pantalla.
  * Limitación: solo reproduce los formatos de audio que admita el dispositivo (p. ej. AC-3/E-AC-3/DTS), no subtítulos de disco.
  */
-class ExoEngine(ctx: Context, surface: SurfaceView, private val cb: Callback, private val preferHdr10: Boolean = false) {
+/** Formato HDR que realmente se está entregando a la pantalla. [dvIgnored]: el vídeo lleva Dolby Vision pero se reproduce su capa base HDR10. */
+class HdrState(val format: String, val dvIgnored: Boolean)
+
+class ExoEngine(private val ctx: Context, surface: SurfaceView, private val cb: Callback, private val avoidDv: Boolean = false) {
     interface Callback {
         fun onReady()
         fun onEnded()
@@ -134,15 +138,21 @@ class ExoEngine(ctx: Context, surface: SurfaceView, private val cb: Callback, pr
         val renderers = DefaultRenderersFactory(ctx)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             .setEnableDecoderFallback(true)
-            // «Forzar HDR10»: sin decodificadores Dolby Vision, Media3 cae al decodificador HEVC normal y usa la capa base (HDR10).
+            // Cola asíncrona de MediaCodec: el decodificador no espera al hilo de reproducción (menos fotogramas perdidos en SoC modestos).
+            .forceEnableMediaCodecAsynchronousQueueing()
+            // Si el decodificador Dolby Vision falla, se reintenta sin él y se usa la capa base HDR10 del decodificador HEVC.
             .setMediaCodecSelector(MediaCodecSelector { mime, secure, tunneling ->
-                if (preferHdr10 && mime == MimeTypes.VIDEO_DOLBY_VISION) emptyList()
+                if (avoidDv && mime == MimeTypes.VIDEO_DOLBY_VISION) emptyList()
                 else MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
             })
+        // Búfer adaptado a la memoria del equipo: un UHD de ~100 Mbps necesita colchón, pero un TV con poca RAM no puede reservar mucho.
+        val memMb = (ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.memoryClass ?: 192
+        val bufMb = (memMb / 4).coerceIn(24, 96)
         val load = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(10_000, 30_000, 1_500, 3_000)
-            .setTargetBufferBytes(48 * 1024 * 1024)
+            .setBufferDurationsMs(15_000, 45_000, 1_500, 3_000)
+            .setTargetBufferBytes(bufMb * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(false)
+            .setBackBuffer(0, false)
             .build()
         player = ExoPlayer.Builder(ctx, renderers).setLoadControl(load).build()
         player.setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -234,17 +244,33 @@ class ExoEngine(ctx: Context, surface: SurfaceView, private val cb: Callback, pr
         return if (out.isEmpty()) listOf("SDR") else out
     }
 
-    /** Resumen: resolución, códec y tipo de HDR que está entregando a la pantalla. */
-    fun describe(): String {
-        val v = player.videoFormat ?: return "Media3"
-        val hdr = when (v.colorInfo?.colorTransfer) {
-            C.COLOR_TRANSFER_ST2084 -> if (v.sampleMimeType?.contains("dolby", true) == true && !preferHdr10) "Dolby Vision" else "HDR10"
-            C.COLOR_TRANSFER_HLG -> "HLG"
-            else -> if (v.sampleMimeType?.contains("dolby", true) == true && !preferHdr10) "Dolby Vision" else if (preferHdr10 && v.sampleMimeType?.contains("dolby", true) == true) "HDR10" else "SDR"
+    /** Formato HDR en uso. [display] son los tipos que declara la pantalla (para saber si HDR10+ puede aplicarse). */
+    fun hdrState(display: List<String>): HdrState {
+        val v = player.videoFormat
+        val mimeDv = v?.sampleMimeType?.contains("dolby", true) == true
+        val dvActive = mimeDv && !avoidDv
+        val t = v?.colorInfo?.colorTransfer
+        val format = when {
+            dvActive -> "Dolby Vision"
+            t == C.COLOR_TRANSFER_ST2084 || mimeDv || probe.hdr10Plus || probe.dolbyVision ->
+                if (probe.hdr10Plus && "HDR10+" in display) "HDR10+" else "HDR10"
+            t == C.COLOR_TRANSFER_HLG -> "HLG"
+            else -> "SDR"
         }
+        return HdrState(format, (probe.dolbyVision || mimeDv) && !dvActive)
+    }
+
+    /** true si ahora mismo se usa un decodificador Dolby Vision (para poder reintentar sin él si falla). */
+    val dolbyVisionActive: Boolean get() = !avoidDv && player.videoFormat?.sampleMimeType?.contains("dolby", true) == true
+
+    val frameRate: Float get() = player.videoFormat?.frameRate?.takeIf { it > 0f } ?: 0f
+
+    /** Resumen: resolución, códec y tipo de HDR que está entregando a la pantalla. */
+    fun describe(display: List<String> = emptyList()): String {
+        val v = player.videoFormat ?: return "Media3"
         val codec = v.sampleMimeType?.substringAfter('/')?.uppercase() ?: "?"
-        val extra = if (probe.hdr10Plus && hdr == "HDR10") "HDR10+" else hdr
-        return "Media3 · ${v.width}x${v.height} · $codec · $extra"
+        val fps = if (v.frameRate > 0f) " · %.3f fps".format(v.frameRate) else ""
+        return "Media3 · ${v.width}x${v.height} · $codec$fps · ${hdrState(display).format}"
     }
 
     fun release() {

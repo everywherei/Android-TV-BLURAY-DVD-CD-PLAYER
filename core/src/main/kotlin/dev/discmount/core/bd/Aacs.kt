@@ -30,6 +30,7 @@ object Aacs {
         0x0B, 0xA0.toByte(), 0xF8.toByte(), 0xDD.toByte(), 0xFE.toByte(), 0xA6.toByte(), 0x1F, 0xB3.toByte(),
         0xD8.toByte(), 0xDF.toByte(), 0x9F.toByte(), 0x56, 0x6A, 0x05, 0x0F, 0x78,
     )
+    private val IV_SPEC = IvParameterSpec(IV)
     private val UKRO = listOf("/AACS/Unit_Key_RO.inf", "/AACS/DUPLICATE/Unit_Key_RO.inf")
 
     private fun readAll(fs: DiscFileSystem, path: String): ByteArray? {
@@ -102,14 +103,16 @@ object Aacs {
     }
 
     /** Descifra in situ la unidad alineada en [buf]/[off] con [uk]. true si no estaba cifrada o si el resultado es TS válido. */
-    fun decryptUnit(uk: Cipher, cbc: Cipher, buf: ByteArray, off: Int, verify: Boolean = true): Boolean {
+    fun decryptUnit(uk: Cipher, cbc: Cipher, buf: ByteArray, off: Int, verify: Boolean = true, scratch: ByteArray? = null): Boolean {
         if ((buf[off].toInt() and 0xC0) == 0) return true          // copy_permission_indicator = 0 → sin cifrar
         val block = uk.doFinal(buf, off, 16)
         for (i in 0 until 16) block[i] = (block[i].toInt() xor buf[off + i].toInt()).toByte()
-        cbc.init(Cipher.DECRYPT_MODE, SecretKeySpec(block, "AES"), IvParameterSpec(IV))
-        val plain = cbc.doFinal(buf, off + 16, UNIT - 16)
+        cbc.init(Cipher.DECRYPT_MODE, SecretKeySpec(block, "AES"), IV_SPEC)
+        // Con un buffer reutilizable no se reserva memoria por unidad (≈2000 unidades/s en un UHD): menos trabajo para el GC.
+        val plain = scratch ?: ByteArray(UNIT - 16)
+        cbc.doFinal(buf, off + 16, UNIT - 16, plain, 0)
         if (verify) for (p in 0 until UNIT / 192) if (!syncAt(buf, off, plain, p)) return false
-        System.arraycopy(plain, 0, buf, off + 16, plain.size)
+        System.arraycopy(plain, 0, buf, off + 16, UNIT - 16)
         buf[off] = (buf[off].toInt() and 0x3F).toByte()
         return true
     }
@@ -130,6 +133,7 @@ class AacsFile(private val inner: DiscFile, private val keys: List<ByteArray>) :
     private val ukCiphers = keys.map { k -> Cipher.getInstance("AES/ECB/NoPadding").apply { init(Cipher.ENCRYPT_MODE, SecretKeySpec(k, "AES")) } }
     private val cbc = Cipher.getInstance("AES/CBC/NoPadding")
     private val raw = ByteArray(Aacs.UNIT * CHUNK)
+    private val scratch = ByteArray(Aacs.UNIT - 16)
 
     /** Comprueba (y elige) la clave con la primera unidad cifrada del fichero. Lanza IOException si ninguna clave sirve. */
     @Synchronized
@@ -180,12 +184,12 @@ class AacsFile(private val inner: DiscFile, private val keys: List<ByteArray>) :
                 val o = u * Aacs.UNIT
                 if ((raw[o].toInt() and 0xC0) == 0) continue
                 if (keyIdx < 0) selectKey(raw.copyOfRange(o, o + Aacs.UNIT))
-                if (!Aacs.decryptUnit(ukCiphers[keyIdx], cbc, raw, o)) {
+                if (!Aacs.decryptUnit(ukCiphers[keyIdx], cbc, raw, o, true, scratch)) {
                     // Otra unidad CPS dentro del mismo fichero: se vuelve a elegir la clave.
                     val saved = keyIdx
                     keyIdx = -1
                     try { selectKey(raw.copyOfRange(o, o + Aacs.UNIT)) } catch (e: IOException) { keyIdx = saved; throw e }
-                    Aacs.decryptUnit(ukCiphers[keyIdx], cbc, raw, o)
+                    Aacs.decryptUnit(ukCiphers[keyIdx], cbc, raw, o, true, scratch)
                 }
             }
             val n = minOf(got - inUnit, want - done)
@@ -198,5 +202,5 @@ class AacsFile(private val inner: DiscFile, private val keys: List<ByteArray>) :
 
     override fun close() = inner.close()
 
-    private companion object { const val CHUNK = 32 }
+    private companion object { const val CHUNK = 64 }
 }

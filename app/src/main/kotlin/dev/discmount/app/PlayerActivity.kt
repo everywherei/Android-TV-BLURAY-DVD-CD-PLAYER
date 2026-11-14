@@ -53,7 +53,8 @@ class PlayerActivity : Activity() {
     private lateinit var overlay: PlayerOverlay
     private var windowHdr = false
     private var speed = 1f
-    private var preferHdr10 = false     // motor HDR: ignorar Dolby Vision y usar la capa base HDR10
+    private var avoidDv = false          // motor HDR: si el decodificador Dolby Vision falla, se reintenta con la capa base HDR10
+    private var modeChecked = false
     private var exo: ExoEngine? = null
     private var useExo = false            // motor activo: false = LibVLC, true = Media3 (HDR)
     private var userChoseEngine = false   // el usuario cambió de motor con MENU: no elegir automáticamente
@@ -69,7 +70,6 @@ class PlayerActivity : Activity() {
         super.onCreate(savedInstanceState)
         I18n.load(this)
         // Si la pantalla admite HDR, pide el modo de color HDR para esta ventana (necesario en algunas teles para activar el HDR).
-        preferHdr10 = getSharedPreferences("discmount", MODE_PRIVATE).getBoolean("prefer_hdr10", false)
         windowHdr = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
         if (windowHdr) window.colorMode = ActivityInfo.COLOR_MODE_HDR
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -267,14 +267,22 @@ class PlayerActivity : Activity() {
     private val exoCb = object : ExoEngine.Callback {
         override fun onReady() = runOnUiThread {
             val e = exo ?: return@runOnUiThread
-            showHud(currentTitle() + "\n" + hdrLine() + "\n" + e.describe(), 5000)
+            showHud(currentTitle() + "\n" + hdrLine() + "\n" + e.describe(hdrTypes()) + "\n" + hdrActiveText(e), 7000)
             ui.postDelayed({
                 if (exo === e && !e.hasPlayableAudio) showHud(I18n.t("exo_no_audio"), 12_000)
             }, 3500)
         }
         override fun onEnded() = runOnUiThread { skip(+1) }
-        override fun onVideoSize(width: Int, height: Int, pixelRatio: Float) = runOnUiThread { fitExoSurface(width, height, pixelRatio) }
+        override fun onVideoSize(width: Int, height: Int, pixelRatio: Float) = runOnUiThread { fitExoSurface(width, height, pixelRatio); ensureDisplayMode(width, height) }
         override fun onError(message: String) = runOnUiThread {
+            // Fallo del decodificador Dolby Vision: primero se reintenta en Media3 con la capa base HDR10 (sigue siendo HDR).
+            if (exo?.dolbyVisionActive == true && !avoidDv) {
+                avoidDv = true
+                resumeAt = curTime()
+                releaseExo()
+                loadCurrent()
+                return@runOnUiThread
+            }
             // Si el motor HDR falla, se vuelve automáticamente a LibVLC en la misma posición.
             if (!exoFailed) {
                 exoFailed = true
@@ -321,7 +329,7 @@ class PlayerActivity : Activity() {
         releaseVlc()
         releaseExo()
         paused = false
-        val e = ExoEngine(this, surface, exoCb, preferHdr10)
+        val e = ExoEngine(this, surface, exoCb, avoidDv)
         exo = e
         e.start(file, resumeAt)
         resumeAt = 0
@@ -487,7 +495,7 @@ class PlayerActivity : Activity() {
 
     private fun engineBadge(): String {
         val e = exo
-        return if (e != null) e.describe().removePrefix("Media3 · ") else "VLC" + (if (softVideo) " · SW" else "")
+        return if (e != null) e.describe(hdrTypes()).removePrefix("Media3 · ") else "VLC" + (if (softVideo) " · SW" else "")
     }
 
     private fun fitExoSurface(w: Int, h: Int, par: Float) {
@@ -550,37 +558,52 @@ class PlayerActivity : Activity() {
         overlay.showMenu(I18n.t("m_subs_title"), items)
     }
 
-    private fun toggleWindowHdr() {
-        windowHdr = !windowHdr
-        if (Build.VERSION.SDK_INT >= 26) window.colorMode = if (windowHdr) ActivityInfo.COLOR_MODE_HDR else ActivityInfo.COLOR_MODE_DEFAULT
-        showHud(I18n.t("m_window_hdr", I18n.t(if (windowHdr) "m_on" else "m_off")), 3000)
+    /** Texto del HDR realmente activo (formato, y avisos si la tele no lo declara o se ignora Dolby Vision). */
+    private fun hdrActiveText(e: ExoEngine): String {
+        val display = hdrTypes()
+        val st = e.hdrState(display)
+        if (st.format == "SDR") return I18n.t("hdr_active_sdr")
+        val lines = arrayListOf(I18n.t("hdr_active", st.format))
+        val need = if (st.format == "HDR10+") "HDR10" else st.format
+        if (display.isEmpty()) lines += I18n.t("hdr_tv_none")
+        else if (need !in display) lines += I18n.t("hdr_tv_nosupport", need)
+        if (st.dvIgnored) lines += I18n.t("hdr_dv_ignored")
+        return lines.joinToString("\n")
+    }
+
+    /**
+     * Si la tele está emitiendo en una resolución menor que el vídeo (p. ej. interfaz a 1080p y vídeo UHD), pide el modo de
+     * pantalla 4K más cercano para que el UHD no se reescale. Los cambios de frecuencia los gestiona Media3 (Surface.setFrameRate).
+     */
+    @Suppress("DEPRECATION")
+    private fun ensureDisplayMode(w: Int, h: Int) {
+        if (modeChecked || Build.VERSION.SDK_INT < 23 || w < 2500) return
+        modeChecked = true
+        try {
+            val d = windowManager.defaultDisplay ?: return
+            val cur = d.mode
+            if (cur.physicalWidth >= w) return
+            val best = d.supportedModes.filter { it.physicalWidth >= w && it.physicalHeight >= h }
+                .minWithOrNull(compareBy<android.view.Display.Mode>({ it.physicalWidth * it.physicalHeight }, { Math.abs(it.refreshRate - cur.refreshRate) }))
+                ?: return
+            val lp = window.attributes
+            lp.preferredDisplayModeId = best.modeId
+            window.attributes = lp
+        } catch (e: Exception) { }
     }
 
     private fun openVideoMenu() {
-        val hdrOk = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
-        val avail = exo?.available() ?: emptyList()
-        val hasDv = "Dolby Vision" in avail
-        val items = listOf(
-            PlayerOverlay.Item(I18n.t("m_hdr_avail", if (avail.isEmpty()) "—" else avail.joinToString(" · ")), false, false) {},
+        val e = exo
+        val items = arrayListOf(
             PlayerOverlay.Item(I18n.t("m_engine_exo"), useExo) { if (!useExo) switchEngine() },
             PlayerOverlay.Item(I18n.t("m_engine_vlc"), !useExo) { if (useExo) switchEngine() },
-            PlayerOverlay.Item(I18n.t("m_hdr_auto"), !preferHdr10, useExo) { setPreferHdr10(false) },
-            PlayerOverlay.Item(I18n.t("m_hdr_dv"), !preferHdr10 && hasDv, useExo && hasDv) { setPreferHdr10(false) },
-            PlayerOverlay.Item(I18n.t("m_hdr_hdr10"), preferHdr10, useExo) { setPreferHdr10(true) },
-            PlayerOverlay.Item(I18n.t("m_window_hdr", I18n.t(if (windowHdr) "m_on" else "m_off")), false, hdrOk) { toggleWindowHdr() },
         )
+        if (e != null) {
+            val info = arrayListOf(PlayerOverlay.Item(I18n.t("m_hdr_avail", e.available().joinToString(" · ")), false, false) {})
+            for (l in hdrActiveText(e).split("\n")) info += PlayerOverlay.Item(l, false, false) {}
+            items.addAll(0, info)
+        }
         overlay.showMenu(I18n.t("m_video_title"), items)
-    }
-
-    /** Cambia entre «automático» (Dolby Vision si el vídeo lo trae) y «forzar HDR10». Reinicia el motor HDR en la misma posición. */
-    private fun setPreferHdr10(value: Boolean) {
-        if (preferHdr10 == value) return
-        preferHdr10 = value
-        getSharedPreferences("discmount", MODE_PRIVATE).edit().putBoolean("prefer_hdr10", value).apply()
-        overlay.hide()
-        resumeAt = curTime()
-        releaseExo(); releaseVlc()
-        loadCurrent()
     }
 
     private fun openSpeedMenu() {
@@ -603,7 +626,8 @@ class PlayerActivity : Activity() {
         line("i_engine", if (e != null) "HDR · Media3" else "VLC · " + (if (softVideo) "SW" else "HW"))
         line("i_file", currentTitle())
         if (e != null) {
-            line("i_video", e.describe().removePrefix("Media3 · "))
+            line("i_video", e.describe(hdrTypes()).removePrefix("Media3 · "))
+            line("i_hdr", hdrActiveText(e).replace("\n", " · "))
         } else {
             var v = ""
             val a = ArrayList<String>()
