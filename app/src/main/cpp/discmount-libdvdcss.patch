@@ -1,0 +1,20 @@
+diff --git a/src/device.c b/src/device.c
+index 5670349..7a92c3e 100644
+--- a/src/device.c
++++ b/src/device.c
+@@ -105,8 +105,15 @@ static int os2_open ( dvdcss_t, const char * );
+ 
+ int dvdcss_use_ioctls( dvdcss_t dvdcss )
+ {
++#ifdef DISCMOUNT_SCSI_BRIDGE
++    /* DiscMount: el "stream" es una unidad óptica cuyos comandos SCSI/MMC se envían por USB
++     * mediante ioctl_scsi.c (sustituye a ioctl.c), así que hay que activar la autenticación. */
++    if( dvdcss->p_stream )
++        return 1;
++#else
+     if( dvdcss->p_stream )
+         return 0;
++#endif
+ 
+ #if defined( _WIN32 )
+     if( dvdcss->b_file )
