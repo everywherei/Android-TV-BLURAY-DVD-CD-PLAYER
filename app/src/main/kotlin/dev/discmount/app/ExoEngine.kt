@@ -261,7 +261,19 @@ class ExoEngine(private val ctx: Context, surface: SurfaceView, private val cb: 
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
-                cb.onError("${error.errorCodeName}${error.cause?.message?.let { ": $it" } ?: ""}")
+                // Diagnóstico completo: cadena de causas + dónde se lanzó la excepción (clase.método:línea).
+                val sb = StringBuilder(error.errorCodeName)
+                var t: Throwable? = error.cause
+                var depth = 0
+                while (t != null && depth < 4) {
+                    sb.append('\n').append(t.javaClass.simpleName).append(t.message?.let { ": $it" } ?: "")
+                    t.stackTrace.take(if (depth == 0) 4 else 1).forEach {
+                        sb.append("\n   @ ").append(it.className.substringAfterLast('.')).append('.').append(it.methodName).append(':').append(it.lineNumber)
+                    }
+                    t = t.cause; depth++
+                }
+                android.util.Log.e("DiscMountExo", "Playback error", error)
+                cb.onError(sb.toString())
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 cb.onVideoSize(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
