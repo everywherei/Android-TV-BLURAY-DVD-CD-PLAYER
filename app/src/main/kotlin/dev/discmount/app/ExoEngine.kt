@@ -90,6 +90,8 @@ class StreamProbe {
     private val rpuPids = HashSet<Int>()
     private var stride = 0
     private var syncMod = 0
+    /** 192 = M2TS de Blu-ray (4 bytes de cabecera + paquete TS), 188 = TS normal, 0 = no detectado. */
+    val packetSize: Int get() = stride
 
     private val base: Int get() = spsPids.minOrNull() ?: -1
     val dolbyVision: Boolean get() = base >= 0 && base in rpuPids
@@ -158,6 +160,53 @@ private class DvTrack(private val t: TrackOutput, private val probe: StreamProbe
     override fun sampleData(data: ParsableByteArray, length: Int, sampleDataPart: Int) = t.sampleData(data, length, sampleDataPart)
     override fun sampleMetadata(timeUs: Long, flags: Int, size: Int, offset: Int, cryptoData: TrackOutput.CryptoData?) =
         t.sampleMetadata(timeUs, flags, size, offset, cryptoData)
+}
+
+/**
+ * Blu-ray guarda el vídeo en M2TS: paquetes de 192 bytes (4 bytes TP_extra_header + 188 de TS).
+ * El extractor TS de Media3 solo reconoce paquetes de 188, por eso fallaba con ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED.
+ * Esta envoltura quita los 4 bytes de cada paquete y presenta el fichero como un TS de 188 con acceso aleatorio.
+ */
+class M2tsAs188(private val inner: DiscFile) : DiscFile {
+    override val size: Long = inner.size / 192 * 188
+    private val raw = ByteArray(192 * 64)
+
+    private fun readRaw(pos: Long, len: Int): Int {
+        var done = 0
+        while (done < len) {
+            val n = inner.read(pos + done, raw, done, len - done)
+            if (n <= 0) break
+            done += n
+        }
+        return done
+    }
+
+    @Synchronized
+    override fun read(pos: Long, dst: ByteArray, off: Int, len: Int): Int {
+        if (pos >= size || len <= 0) return -1
+        val want = minOf(len.toLong(), size - pos).toInt()
+        var done = 0
+        while (done < want) {
+            val p = pos + done
+            val pkt = p / 188
+            val inPkt = (p % 188).toInt()
+            val packets = minOf(64, (inPkt + (want - done) + 187) / 188)
+            val got = readRaw(pkt * 192, packets * 192) / 192
+            if (got <= 0) break
+            var skip = inPkt
+            for (k in 0 until got) {
+                val n = minOf(188 - skip, want - done)
+                System.arraycopy(raw, k * 192 + 4 + skip, dst, off + done, n)
+                done += n
+                skip = 0
+                if (done >= want) break
+            }
+            if (got < packets) break
+        }
+        return if (done == 0) -1 else done
+    }
+
+    override fun close() { inner.close() }
 }
 
 /** Formato HDR que realmente se está entregando a la pantalla. [dvIgnored]: el vídeo lleva Dolby Vision pero se reproduce su capa base HDR10. */
@@ -250,7 +299,9 @@ class ExoEngine(private val ctx: Context, surface: SurfaceView, private val cb: 
         val extractors = androidx.media3.extractor.ExtractorsFactory {
             base.createExtractors().map { if (!avoidDv && dvDecoder) DvExtractor(it, p) as Extractor else it }.toTypedArray()
         }
-        val factory = DataSource.Factory { DiscDataSource(f) }
+        // M2TS (192 B/paquete) -> TS (188 B/paquete) para que lo lea el extractor de Media3.
+        val src: DiscFile = if (p.packetSize == 192) M2tsAs188(f) else f
+        val factory = DataSource.Factory { DiscDataSource(src) }
         val source = ProgressiveMediaSource.Factory(factory, extractors)
             .createMediaSource(MediaItem.fromUri(Uri.parse("disc://video")))
         player.setMediaSource(source, if (startMs > 0) startMs else C.TIME_UNSET)

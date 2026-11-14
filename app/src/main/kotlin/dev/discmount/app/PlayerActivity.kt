@@ -71,7 +71,7 @@ class PlayerActivity : Activity() {
         I18n.load(this)
         // Si la pantalla admite HDR, pide el modo de color HDR para esta ventana (necesario en algunas teles para activar el HDR).
         windowHdr = Build.VERSION.SDK_INT >= 26 && hdrTypes().isNotEmpty()
-        if (windowHdr) window.colorMode = ActivityInfo.COLOR_MODE_HDR
+        // El modo HDR de la ventana ya NO se fuerza aquí: solo se activa en applyColorMode() cuando Media3 confirma que el vídeo es HDR.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         surface = SurfaceView(this)
         hud = TextView(this).apply {
